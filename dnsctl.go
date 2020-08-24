@@ -64,10 +64,14 @@ func handleIpV4(records do.DomainRecords, host string, ds do.DomainsService, dom
 		TTL:  60,
 	}
 
-	if record != nil && ipv4address == "" {
-		fmt.Printf("Deleting outdated IPv6 record: %s\n", record.Data)
-		err := ds.DeleteRecord(domain, record.ID)
-		return err
+	if ipv4address == "" {
+		if record != nil {
+			fmt.Printf("Deleting outdated IPv4 record: %s\n", record.Data)
+			err := ds.DeleteRecord(domain, record.ID)
+			return err
+		}
+		fmt.Printf("No IPv4 record or address\n")
+		return nil
 	}
 
 	if record == nil {
@@ -100,10 +104,14 @@ func handleIpV6(records do.DomainRecords, host string, ds do.DomainsService, dom
 		TTL:  60,
 	}
 
-	if record != nil && ipv6address == "" {
-		fmt.Printf("Deleting outdated IPv6 record: %s\n", record.Data)
-		err := ds.DeleteRecord(domain, record.ID)
-		return err
+	if ipv6address == "" {
+		if record != nil {
+			fmt.Printf("Deleting outdated IPv6 record: %s\n", record.Data)
+			err := ds.DeleteRecord(domain, record.ID)
+			return err
+		}
+		fmt.Printf("No IPv6 record or address\n")
+		return nil
 	}
 
 	if record == nil {
