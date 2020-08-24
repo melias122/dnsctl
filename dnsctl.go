@@ -14,8 +14,8 @@ import (
 func main() {
 	// hostname, ipv4 or ipv6 or both
 	hostname := flag.String("hostname", "example.com", "Which hostname to update")
-	ipv4 := flag.Bool("4", false, "Only update IPv4")
-	ipv6 := flag.Bool("6", false, "Only update IPv6")
+	ignoreIpv6 := flag.Bool("4", false, "Only update IPv4")
+	ignoreIpv4 := flag.Bool("6", false, "Only update IPv6")
 	token := flag.String("token", "", "AUTH-Token for digitalocean")
 	flag.Parse()
 
@@ -27,97 +27,99 @@ func main() {
 	client := godo.NewFromToken(*token)
 	ds := do.NewDomainsService(client)
 
-	ipv4address := getIpV4Address()
-	ipv6address := getIpV6Address()
-
 	domain := fmt.Sprintf("%s.%s", domainParts[len(domainParts)-2], domainParts[len(domainParts)-1])
 	host := strings.Join(domainParts[:len(domainParts)-2], ".")
-	fmt.Printf("Finding records for %s\n", host)
+	fmt.Printf("Fetching existing records for %s\n", *hostname)
 	records, err := ds.Records(domain)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Printf("Updating %s\n", *hostname)
+	if *ignoreIpv6 == false {
+		err := handleIpV6(records, host, ds, domain)
+		if err != nil {
+			panic(err)
+		}
+	}
 
-	recordRequestv4 := do.DomainRecordEditRequest{
+	if *ignoreIpv4 == false {
+		err := handleIpV4(records, host, ds, domain)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func handleIpV4(records do.DomainRecords, host string, ds do.DomainsService, domain string) error {
+	ipv4address := getContent("https://v4.ident.me/")
+	if ipv4address != "" {
+		fmt.Printf("Found public IPv4: %s\n", ipv4address)
+	}
+
+	record := findRecord(records, host, "A")
+	request := do.DomainRecordEditRequest{
 		Type: "A",
 		Name: host,
 		Data: ipv4address,
 		TTL:  60,
 	}
-	recordRequestv6 := do.DomainRecordEditRequest{
+
+	if record != nil && ipv4address == "" {
+		fmt.Printf("Deleting outdated IPv6 record: %s\n", record.Data)
+		err := ds.DeleteRecord(domain, record.ID)
+		return err
+	}
+
+	if record == nil {
+		fmt.Printf("Creating new IPv4: %s\n", ipv4address)
+		_, err := ds.CreateRecord(domain, &request)
+		return err
+	}
+
+	if record.Data != ipv4address {
+		fmt.Printf("Updating existing IPv4: %s\n", ipv4address)
+		_, err := ds.EditRecord(domain, record.ID, &request)
+		return err
+	} else {
+		fmt.Printf("No changes for IPv4\n")
+		return nil
+	}
+}
+
+func handleIpV6(records do.DomainRecords, host string, ds do.DomainsService, domain string) error {
+
+	ipv6address := getContent("https://v6.ident.me/")
+	if ipv6address != "" {
+		fmt.Printf("Found public IPv6: %s\n", ipv6address)
+	}
+	record := findRecord(records, host, "AAAA")
+	request := do.DomainRecordEditRequest{
 		Type: "AAAA",
 		Name: host,
 		Data: ipv6address,
 		TTL:  60,
 	}
-	if *ipv4 {
 
-		record := findRecord(records, host, "A")
-		if record == nil {
-			fmt.Printf("Creating new IPv4: %s\n", ipv4address)
-			_, err := ds.CreateRecord(domain, &recordRequestv4)
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			fmt.Printf("Updating only IPv4: %s\n", ipv4address)
-			_, err := ds.EditRecord(domain, record.ID, &recordRequestv4)
-			if err != nil {
-				panic(err)
-			}
-		}
-	} else if *ipv6 {
-
-		record := findRecord(records, host, "AAAA")
-		if record == nil {
-			fmt.Printf("Creating new IPv6: %s\n", ipv6address)
-			_, err := ds.CreateRecord(domain, &recordRequestv6)
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			fmt.Printf("Updating only IPv6: %s\n", ipv6address)
-			_, err := ds.EditRecord(domain, record.ID, &recordRequestv6)
-			if err != nil {
-				panic(err)
-			}
-		}
-	} else {
-		fmt.Printf("Updating IPv4 and IPv6: %s / %s\n", ipv4address, ipv6address)
-
-		record := findRecord(records, host, "AAAA")
-		if record == nil {
-			fmt.Printf("Creating new IPv6: %s\n", ipv6address)
-			_, err := ds.CreateRecord(domain, &recordRequestv6)
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			fmt.Printf("Updating only IPv6: %s\n", ipv6address)
-			_, err := ds.EditRecord(domain, record.ID, &recordRequestv6)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		record = findRecord(records, host, "A")
-		if record == nil {
-			fmt.Printf("Creating new IPv4: %s\n", ipv4address)
-			_, err := ds.CreateRecord(domain, &recordRequestv4)
-			if err != nil {
-				panic(err)
-			}
-		} else {
-			fmt.Printf("Updating only IPv4: %s\n", ipv4address)
-			_, err := ds.EditRecord(domain, record.ID, &recordRequestv4)
-			if err != nil {
-				panic(err)
-			}
-		}
+	if record != nil && ipv6address == "" {
+		fmt.Printf("Deleting outdated IPv6 record: %s\n", record.Data)
+		err := ds.DeleteRecord(domain, record.ID)
+		return err
 	}
 
+	if record == nil {
+		fmt.Printf("Creating new IPv6: %s\n", ipv6address)
+		_, err := ds.CreateRecord(domain, &request)
+		return err
+	}
+
+	if record.Data != ipv6address {
+		fmt.Printf("Updating existing IPv6: %s\n", ipv6address)
+		_, err := ds.EditRecord(domain, record.ID, &request)
+		return err
+	} else {
+		fmt.Printf("No changes for IPv6\n")
+		return nil
+	}
 }
 
 func findRecord(records []do.DomainRecord, hostname string, recordType string) *do.DomainRecord {
@@ -129,28 +131,15 @@ func findRecord(records []do.DomainRecord, hostname string, recordType string) *
 	return nil
 }
 
-func getIpV4Address() string {
-	response, err := http.Get("https://v4.ident.me/")
+func getContent(url string) string {
+	response, err := http.Get(url)
 	if err != nil {
-		panic(err)
+		return ""
 	}
 	address, err := ioutil.ReadAll(response.Body)
 	defer response.Body.Close()
 	if err != nil {
-		panic(err)
-	}
-	return string(address)
-}
-
-func getIpV6Address() string {
-	response, err := http.Get("https://v6.ident.me/")
-	if err != nil {
-		panic(err)
-	}
-	address, err := ioutil.ReadAll(response.Body)
-	defer response.Body.Close()
-	if err != nil {
-		panic(err)
+		return ""
 	}
 	return string(address)
 }
