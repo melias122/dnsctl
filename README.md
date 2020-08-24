@@ -1,8 +1,10 @@
 # dnsctl
 
-A simple tool to automate updating of dynamic dns
+A simple tool to automate updating of dynamic dns.
 
-For know, only supports DigitalOcean as registrar
+For know, only supports DigitalOcean as registrar.
+
+to install: `go get github.com/Richard87/dnsctl`
 
 `./dnsctl --hostname host.example.com --token <DIGITAL_OCEAN_TOKEN>`
 
