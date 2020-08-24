@@ -1,4 +1,4 @@
-module dnsctl
+module  github.com/Richard87/dnsctl
 
 go 1.14
 
