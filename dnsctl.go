@@ -1,133 +1,25 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
-	"github.com/digitalocean/doctl/do"
-	"github.com/digitalocean/godo"
-	"io/ioutil"
+	"io"
+	"log"
 	"net/http"
 	"strings"
+
+	"github.com/digitalocean/doctl/do"
+	"github.com/digitalocean/godo"
 )
 
-func main() {
-	// hostname, ipv4 or ipv6 or both
-	hostname := flag.String("hostname", "example.com", "Which hostname to update")
-	ignoreIpv6 := flag.Bool("4", false, "Only update IPv4")
-	ignoreIpv4 := flag.Bool("6", false, "Only update IPv6")
-	token := flag.String("token", "", "AUTH-Token for digitalocean")
-	flag.Parse()
-
-	domainParts := strings.Split(*hostname, ".")
-	if len(domainParts) <= 2 {
-		panic(errors.New("hostname require at least 3 parts"))
+func parseHostname(hostname string) (string, string, error) {
+	p := strings.Split(hostname, ".")
+	if len(p) < 2 {
+		return "", "", fmt.Errorf("invalid hostname %s", hostname)
 	}
-
-	client := godo.NewFromToken(*token)
-	ds := do.NewDomainsService(client)
-
-	domain := fmt.Sprintf("%s.%s", domainParts[len(domainParts)-2], domainParts[len(domainParts)-1])
-	host := strings.Join(domainParts[:len(domainParts)-2], ".")
-	fmt.Printf("Fetching existing records for %s\n", *hostname)
-	records, err := ds.Records(domain)
-	if err != nil {
-		panic(err)
-	}
-
-	if *ignoreIpv6 == false {
-		err := handleIpV6(records, host, ds, domain)
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	if *ignoreIpv4 == false {
-		err := handleIpV4(records, host, ds, domain)
-		if err != nil {
-			panic(err)
-		}
-	}
-}
-
-func handleIpV4(records do.DomainRecords, host string, ds do.DomainsService, domain string) error {
-	ipv4address := getContent("https://v4.ident.me/")
-	if ipv4address != "" {
-		fmt.Printf("Found public IPv4: %s\n", ipv4address)
-	}
-
-	record := findRecord(records, host, "A")
-	request := do.DomainRecordEditRequest{
-		Type: "A",
-		Name: host,
-		Data: ipv4address,
-		TTL:  60,
-	}
-
-	if ipv4address == "" {
-		if record != nil {
-			fmt.Printf("Deleting outdated IPv4 record: %s\n", record.Data)
-			err := ds.DeleteRecord(domain, record.ID)
-			return err
-		}
-		fmt.Printf("No IPv4 record or address\n")
-		return nil
-	}
-
-	if record == nil {
-		fmt.Printf("Creating new IPv4: %s\n", ipv4address)
-		_, err := ds.CreateRecord(domain, &request)
-		return err
-	}
-
-	if record.Data != ipv4address {
-		fmt.Printf("Updating existing IPv4: %s\n", ipv4address)
-		_, err := ds.EditRecord(domain, record.ID, &request)
-		return err
-	} else {
-		fmt.Printf("No changes for IPv4\n")
-		return nil
-	}
-}
-
-func handleIpV6(records do.DomainRecords, host string, ds do.DomainsService, domain string) error {
-
-	ipv6address := getContent("https://v6.ident.me/")
-	if ipv6address != "" {
-		fmt.Printf("Found public IPv6: %s\n", ipv6address)
-	}
-	record := findRecord(records, host, "AAAA")
-	request := do.DomainRecordEditRequest{
-		Type: "AAAA",
-		Name: host,
-		Data: ipv6address,
-		TTL:  60,
-	}
-
-	if ipv6address == "" {
-		if record != nil {
-			fmt.Printf("Deleting outdated IPv6 record: %s\n", record.Data)
-			err := ds.DeleteRecord(domain, record.ID)
-			return err
-		}
-		fmt.Printf("No IPv6 record or address\n")
-		return nil
-	}
-
-	if record == nil {
-		fmt.Printf("Creating new IPv6: %s\n", ipv6address)
-		_, err := ds.CreateRecord(domain, &request)
-		return err
-	}
-
-	if record.Data != ipv6address {
-		fmt.Printf("Updating existing IPv6: %s\n", ipv6address)
-		_, err := ds.EditRecord(domain, record.ID, &request)
-		return err
-	} else {
-		fmt.Printf("No changes for IPv6\n")
-		return nil
-	}
+	subdomain := strings.Join(p[:len(p)-2], ".")
+	domain := strings.Join(p[len(p)-2:], ".")
+	return subdomain, domain, nil
 }
 
 func findRecord(records []do.DomainRecord, hostname string, recordType string) *do.DomainRecord {
@@ -139,15 +31,110 @@ func findRecord(records []do.DomainRecord, hostname string, recordType string) *
 	return nil
 }
 
-func getContent(url string) string {
-	response, err := http.Get(url)
+func myip(url string) (string, error) {
+	resp, err := http.Get(url)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	address, err := ioutil.ReadAll(response.Body)
-	defer response.Body.Close()
+	addr, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return string(address)
+	defer resp.Body.Close()
+	return string(addr), nil
+}
+
+func run(ds do.DomainsService, hostname string, typ string, forceIpAddr string) error {
+	subdomain, domain, err := parseHostname(hostname)
+	if err != nil {
+		return err
+	}
+
+	// if there is no subdomain, update domain itself
+	if subdomain == "" {
+		subdomain = "@"
+	}
+
+	ipAddr := forceIpAddr
+	if ipAddr == "" {
+		switch typ {
+		case "A":
+			ipv4, err := myip("https://v4.ident.me")
+			if err != nil {
+				return err
+			}
+			ipAddr = ipv4
+		case "AAAA":
+			ipv6, err := myip("https://v6.ident.me")
+			if err != nil {
+				return err
+			}
+			ipAddr = ipv6
+		default:
+			return fmt.Errorf("unknown typ %s", typ)
+		}
+	}
+
+	request := do.DomainRecordEditRequest{
+		Type: typ,
+		Name: subdomain,
+		Data: ipAddr,
+		TTL:  3600,
+	}
+
+	records, err := ds.Records(domain)
+	if err != nil {
+		return err
+	}
+
+	record := findRecord(records, subdomain, "A")
+	if record == nil {
+		if ipAddr == "" {
+			return fmt.Errorf("ipv4 is empty cannot create record")
+		}
+
+		log.Printf("creating new record:%s %s.%s %s\n", request.Type, request.Name, domain, ipAddr)
+		_, err := ds.CreateRecord(domain, &request)
+		return err
+	} else if ipAddr == "" {
+		log.Printf("deleting outdated record:%s %s.%s %s\n", record.Type, record.Name, domain, record.Data)
+		return ds.DeleteRecord(domain, record.ID)
+	} else if record.Data != ipAddr {
+		log.Printf("updating record:%s %s.%s %s->%s\n", record.Type, record.Name, domain, record.Data, ipAddr)
+		_, err := ds.EditRecord(domain, record.ID, &request)
+		return err
+	}
+
+	return nil
+}
+
+func main() {
+	log.SetFlags(0)
+
+	var (
+		token       = flag.String("token", "", "Digitalocean auth token")
+		no4         = flag.Bool("no4", false, "Do not update A record")
+		no6         = flag.Bool("no6", false, "Do not update AAAA record")
+		hostname    = flag.String("hostname", "example.com", "Hostname to update. It could have subdomain (sub.example.com)")
+		forceIPAddr = flag.String("forceIPAddr", "", "Force IP address override")
+	)
+	flag.Parse()
+
+	if *token == "" {
+		log.Fatal("token is not set")
+	}
+
+	client := godo.NewFromToken(*token)
+	ds := do.NewDomainsService(client)
+
+	if !*no4 {
+		if err := run(ds, *hostname, "A", *forceIPAddr); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if !*no6 {
+		if err := run(ds, *hostname, "AAAA", *forceIPAddr); err != nil {
+			log.Fatal(err)
+		}
+	}
 }
